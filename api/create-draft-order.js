@@ -13,19 +13,142 @@ const API_VERSION = '2024-10'; // Shopify API version
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
 
-// Tier discount configuration (MUST match theme settings)
-const TIER_CONFIG = {
-  // Order matters: highest tier first for tag matching priority
-  tiers: [
-    { name: 'BLACK DIAMOND', tag: 'BLACK DIAMOND', discount: 10, threshold: 1000000 },
-    { name: 'DIAMOND', tag: 'DIAMOND', discount: 8, threshold: 3000 },
-    { name: 'PLATINUM', tag: 'PLATINUM', discount: 6, threshold: 1500 },
-    { name: 'GOLD', tag: 'GOLD', discount: 4, threshold: 500 },
-    { name: 'SILVER', tag: 'SILVER', discount: 2, threshold: 150 },
-    { name: 'MEMBER', tag: 'MEMBER', discount: 0, threshold: 0 }
-  ],
-  prioritize_tags: true // Match theme setting: tier_prioritize_tags
-};
+// Cache for tier config (avoid repeated API calls)
+let cachedTierConfig = null;
+let cacheExpiry = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fetch tier configuration from Shopify theme settings
+ * This reads from settings_data.json via Asset API
+ * Single source of truth - change settings in Shopify admin only
+ */
+async function getTierConfig() {
+  // Return cached config if still valid
+  if (cachedTierConfig && Date.now() < cacheExpiry) {
+    return cachedTierConfig;
+  }
+
+  try {
+    // Get active theme ID first
+    const themesResponse = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/${API_VERSION}/themes.json`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN
+        }
+      }
+    );
+
+    if (!themesResponse.ok) {
+      console.error('Failed to fetch themes:', themesResponse.status);
+      return getDefaultTierConfig();
+    }
+
+    const themesData = await themesResponse.json();
+    const activeTheme = themesData.themes.find(t => t.role === 'main');
+
+    if (!activeTheme) {
+      console.error('No active theme found');
+      return getDefaultTierConfig();
+    }
+
+    // Fetch settings_data.json from theme
+    const assetResponse = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/${API_VERSION}/themes/${activeTheme.id}/assets.json?asset[key]=config/settings_data.json`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN
+        }
+      }
+    );
+
+    if (!assetResponse.ok) {
+      console.error('Failed to fetch settings_data.json:', assetResponse.status);
+      return getDefaultTierConfig();
+    }
+
+    const assetData = await assetResponse.json();
+    const settingsJson = JSON.parse(assetData.asset.value);
+    const settings = settingsJson.current;
+
+    // Build tier config from theme settings
+    const tierConfig = {
+      prioritize_tags: settings.tier_prioritize_tags || false,
+      tiers: [
+        {
+          name: settings.tier_1_name || 'BLACK DIAMOND',
+          tag: settings.tier_1_tag || 'BLACK DIAMOND',
+          discount: settings.tier_1_discount || 0,
+          threshold: parseFloat(settings.tier_1_threshold) || 0
+        },
+        {
+          name: settings.tier_2_name || 'DIAMOND',
+          tag: settings.tier_2_tag || 'DIAMOND',
+          discount: settings.tier_2_discount || 0,
+          threshold: parseFloat(settings.tier_2_threshold) || 0
+        },
+        {
+          name: settings.tier_3_name || 'PLATINUM',
+          tag: settings.tier_3_tag || 'PLATINUM',
+          discount: settings.tier_3_discount || 0,
+          threshold: parseFloat(settings.tier_3_threshold) || 0
+        },
+        {
+          name: settings.tier_4_name || 'GOLD',
+          tag: settings.tier_4_tag || 'GOLD',
+          discount: settings.tier_4_discount || 0,
+          threshold: parseFloat(settings.tier_4_threshold) || 0
+        },
+        {
+          name: settings.tier_5_name || 'SILVER',
+          tag: settings.tier_5_tag || 'SILVER',
+          discount: settings.tier_5_discount || 0,
+          threshold: parseFloat(settings.tier_5_threshold) || 0
+        },
+        {
+          name: settings.tier_6_name || 'MEMBER',
+          tag: settings.tier_6_name || 'MEMBER',
+          discount: settings.tier_6_discount || 0,
+          threshold: 0
+        }
+      ]
+    };
+
+    console.log('Loaded tier config from Shopify:', JSON.stringify(tierConfig, null, 2));
+
+    // Cache the config
+    cachedTierConfig = tierConfig;
+    cacheExpiry = Date.now() + CACHE_TTL;
+
+    return tierConfig;
+
+  } catch (error) {
+    console.error('Error fetching tier config:', error);
+    return getDefaultTierConfig();
+  }
+}
+
+/**
+ * Default fallback config (used if API fails)
+ */
+function getDefaultTierConfig() {
+  return {
+    prioritize_tags: true,
+    tiers: [
+      { name: 'BLACK DIAMOND', tag: 'BLACK DIAMOND', discount: 10, threshold: 1000000 },
+      { name: 'DIAMOND', tag: 'DIAMOND', discount: 8, threshold: 3000 },
+      { name: 'PLATINUM', tag: 'PLATINUM', discount: 6, threshold: 1500 },
+      { name: 'GOLD', tag: 'GOLD', discount: 4, threshold: 500 },
+      { name: 'SILVER', tag: 'SILVER', discount: 2, threshold: 150 },
+      { name: 'MEMBER', tag: 'MEMBER', discount: 0, threshold: 0 }
+    ]
+  };
+}
 
 /**
  * Get customer tier from Shopify API
@@ -68,12 +191,15 @@ async function getCustomerTier(customerId) {
 
     console.log(`Customer ${customerId}: total_spent=${totalSpent}, tags=[${customerTags.join(', ')}]`);
 
+    // Fetch tier config from Shopify theme settings
+    const tierConfig = await getTierConfig();
+
     // Step 1: Calculate tier from total_spent (find highest threshold met)
     let tierFromSpent = null;
     let discountFromSpent = 0;
     let maxThreshold = -1;
 
-    for (const tier of TIER_CONFIG.tiers) {
+    for (const tier of tierConfig.tiers) {
       if (totalSpent >= tier.threshold && tier.threshold > maxThreshold) {
         tierFromSpent = tier.name;
         discountFromSpent = tier.discount;
@@ -84,8 +210,8 @@ async function getCustomerTier(customerId) {
     console.log(`Tier from total_spent: ${tierFromSpent || 'none'} (${discountFromSpent}%)`);
 
     // Step 2: Check tags override (if enabled)
-    if (TIER_CONFIG.prioritize_tags) {
-      for (const tier of TIER_CONFIG.tiers) {
+    if (tierConfig.prioritize_tags) {
+      for (const tier of tierConfig.tiers) {
         if (customerTags.includes(tier.tag.toUpperCase())) {
           console.log(`Tag override: ${tier.name} (${tier.discount}%)`);
           return { tier: tier.name, discount: tier.discount };
