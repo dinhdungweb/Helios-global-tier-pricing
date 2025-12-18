@@ -1,0 +1,17 @@
+{
+  "customer_email": "customer@example.com",
+  "items": [
+    {
+      "variant_id": "44444444444444",
+      "quantity": 2,
+      "price": 100.00,
+      "discount_percent": 15
+    },
+    {
+      "variant_id": "55555555555555",
+      "quantity": 1,
+      "price": 50.00,
+      "discount_percent": 20
+    }
+  ]
+}
