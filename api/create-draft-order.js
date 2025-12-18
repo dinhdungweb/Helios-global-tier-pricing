@@ -14,21 +14,25 @@ const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
 
 // Tier discount configuration (MUST match theme settings)
-const TIER_DISCOUNTS = {
-  'BLACK DIAMOND': 10,
-  'BLACKDIAMOND': 10,
-  'DIAMOND': 8,
-  'PLATINUM': 6,
-  'GOLD': 4,
-  'SILVER': 2,
-  'MEMBER': 0
+const TIER_CONFIG = {
+  // Order matters: highest tier first for tag matching priority
+  tiers: [
+    { name: 'BLACK DIAMOND', tag: 'BLACK DIAMOND', discount: 10, threshold: 1000000 },
+    { name: 'DIAMOND', tag: 'DIAMOND', discount: 8, threshold: 3000 },
+    { name: 'PLATINUM', tag: 'PLATINUM', discount: 6, threshold: 1500 },
+    { name: 'GOLD', tag: 'GOLD', discount: 4, threshold: 500 },
+    { name: 'SILVER', tag: 'SILVER', discount: 2, threshold: 150 },
+    { name: 'MEMBER', tag: 'MEMBER', discount: 0, threshold: 0 }
+  ],
+  prioritize_tags: true // Match theme setting: tier_prioritize_tags
 };
-
-// All valid tier tags (for matching customer tags)
-const VALID_TIER_TAGS = ['BLACK DIAMOND', 'BLACKDIAMOND', 'DIAMOND', 'PLATINUM', 'GOLD', 'SILVER', 'MEMBER'];
 
 /**
  * Get customer tier from Shopify API
+ * Logic matches frontend (tier-price.liquid):
+ * 1. Calculate tier from total_spent (find highest threshold customer meets)
+ * 2. If prioritize_tags is enabled and customer has tier tag, override with tag
+ * 
  * @param {string} customerId - Shopify customer ID
  * @returns {Promise<{tier: string|null, discount: number}>}
  */
@@ -55,21 +59,43 @@ async function getCustomerTier(customerId) {
     }
 
     const data = await response.json();
-    const customerTags = data.customer?.tags || '';
-    const tagsArray = customerTags.split(',').map(t => t.trim().toUpperCase());
+    const customer = data.customer;
 
-    // Find matching tier (priority order: higher tiers first)
-    for (const tierTag of VALID_TIER_TAGS) {
-      if (tagsArray.includes(tierTag.toUpperCase())) {
-        const discount = TIER_DISCOUNTS[tierTag] || 0;
-        console.log(`Customer ${customerId} has tier: ${tierTag}, discount: ${discount}%`);
-        return { tier: tierTag, discount };
+    // Get total_spent in base currency (Shopify returns in cents for some currencies)
+    // Note: total_spent is already in whole currency units for USD
+    const totalSpent = parseFloat(customer?.total_spent || 0);
+    const customerTags = (customer?.tags || '').split(',').map(t => t.trim().toUpperCase());
+
+    console.log(`Customer ${customerId}: total_spent=${totalSpent}, tags=[${customerTags.join(', ')}]`);
+
+    // Step 1: Calculate tier from total_spent (find highest threshold met)
+    let tierFromSpent = null;
+    let discountFromSpent = 0;
+    let maxThreshold = -1;
+
+    for (const tier of TIER_CONFIG.tiers) {
+      if (totalSpent >= tier.threshold && tier.threshold > maxThreshold) {
+        tierFromSpent = tier.name;
+        discountFromSpent = tier.discount;
+        maxThreshold = tier.threshold;
       }
     }
 
-    // No tier tag found
-    console.log(`Customer ${customerId} has no tier tag`);
-    return { tier: null, discount: 0 };
+    console.log(`Tier from total_spent: ${tierFromSpent || 'none'} (${discountFromSpent}%)`);
+
+    // Step 2: Check tags override (if enabled)
+    if (TIER_CONFIG.prioritize_tags) {
+      for (const tier of TIER_CONFIG.tiers) {
+        if (customerTags.includes(tier.tag.toUpperCase())) {
+          console.log(`Tag override: ${tier.name} (${tier.discount}%)`);
+          return { tier: tier.name, discount: tier.discount };
+        }
+      }
+    }
+
+    // Return tier from total_spent calculation
+    return { tier: tierFromSpent, discount: discountFromSpent };
+
   } catch (error) {
     console.error('Error fetching customer tier:', error);
     return { tier: null, discount: 0 };
