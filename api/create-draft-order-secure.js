@@ -288,14 +288,13 @@ function buildDraftOrderLineItem(item) {
     item.shopUnitDiscountAmount,
     item.shopCurrency
   );
-  const lineDiscountAmount = item.unitDiscountAmount * item.quantity;
 
-  if (lineDiscountAmount > 0) {
+  if (item.unitDiscountAmount > 0) {
     const discountTitle = item.isGift
       ? 'Free gift'
       : `Tier Discount ${normalizeDiscountPercent(item.discountPercent)}%`;
     const formattedDiscount = formatMoney(
-      lineDiscountAmount,
+      item.unitDiscountAmount,
       item.currency
     );
 
@@ -303,8 +302,8 @@ function buildDraftOrderLineItem(item) {
       title: discountTitle,
       description: discountTitle,
       valueType: 'FIXED_AMOUNT',
-      // Shopify's fixed `value` is per unit, while amountWithCurrency is the
-      // total applied amount for the complete line-item quantity.
+      // Both fixed-amount representations are per unit. Shopify multiplies
+      // them by the line-item quantity when calculating the draft total.
       value: Number(shopUnitDiscountAmount),
       amountWithCurrency: {
         amount: formattedDiscount,

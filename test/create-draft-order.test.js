@@ -69,7 +69,7 @@ test('validates variant IDs and quantity limits', () => {
   );
 });
 
-test('formats fixed discounts for the entire line quantity', () => {
+test('formats fixed discounts per unit so Shopify applies quantity once', () => {
   const lineItem = buildDraftOrderLineItem({
     variantId: '100',
     quantity: 2,
@@ -83,7 +83,7 @@ test('formats fixed discounts for the entire line quantity', () => {
 
   assert.equal(lineItem.appliedDiscount.value, 13.2);
   assert.deepEqual(lineItem.appliedDiscount.amountWithCurrency, {
-    amount: '26.40',
+    amount: '13.20',
     currencyCode: 'USD'
   });
 });
