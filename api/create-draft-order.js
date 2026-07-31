@@ -10,6 +10,9 @@
 const SHOPIFY_SHOP = process.env.SHOPIFY_SHOP; // your-shop.myshopify.com
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN; // Admin API access token
 const API_VERSION = '2024-10'; // Shopify API version
+const DISABLE_LEGACY_ENDPOINT = String(
+  process.env.DISABLE_LEGACY_ENDPOINT || ''
+).trim().toLowerCase() === 'true';
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -23,6 +26,12 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  if (DISABLE_LEGACY_ENDPOINT) {
+    return res.status(410).json({
+      error: 'Legacy draft order endpoint is disabled'
+    });
   }
 
   if (req.method !== 'POST') {

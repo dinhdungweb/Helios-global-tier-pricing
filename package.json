@@ -8,7 +8,8 @@
     "deploy": "vercel --prod",
     "logs": "vercel logs",
     "env": "vercel env ls",
-    "test": "curl -X POST http://localhost:3000/api/create-draft-order -H 'Content-Type: application/json' -d @api/test-request.json"
+    "test": "node --test test/*.test.js",
+    "test:legacy-request": "curl -X POST http://localhost:3000/api/create-draft-order -H 'Content-Type: application/json' -d @api/test-request.json"
   },
   "dependencies": {
     "dotenv": "^17.2.3"
