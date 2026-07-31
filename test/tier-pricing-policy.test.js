@@ -64,6 +64,18 @@ test('customer tags take priority over spend thresholds', () => {
   assert.equal(tier.discount, 8);
 });
 
+test('falls back to Shopify amount spent when the custom metafield is absent', () => {
+  const policy = getTierPolicy({});
+  const tier = resolveCustomerTier({
+    tags: [],
+    totalSpentMetafield: null,
+    amountSpent: { amount: '419', currencyCode: 'USD' }
+  }, policy);
+
+  assert.equal(tier.name, 'SILVER');
+  assert.equal(tier.discount, 5);
+});
+
 test('client price and discount fields cannot change authoritative pricing', () => {
   const variant = createVariant();
   const items = buildAuthoritativeItems({
