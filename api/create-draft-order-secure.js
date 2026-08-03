@@ -11,9 +11,12 @@
 const crypto = require('crypto');
 const {
   buildAuthoritativeItems,
-  getTierPolicy,
+  getTierPolicyFromThemeSettings,
   normalizeNumericId
 } = require('../lib/tier-pricing-policy');
+const {
+  mergePublishedThemeSettings
+} = require('../lib/theme-settings');
 
 const SHOPIFY_SHOP = normalizeShopDomain(process.env.SHOPIFY_SHOP);
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
@@ -34,6 +37,11 @@ const MAX_QUANTITY = 100;
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
 const MAX_PROXY_REQUEST_AGE_SECONDS = 300;
+const THEME_POLICY_CACHE_TTL_MS = normalizePositiveInteger(
+  process.env.THEME_POLICY_CACHE_TTL_MS,
+  60000
+);
+let themePolicyCache = null;
 const ALLOWED_ORIGINS = new Set(
   String(
     process.env.ALLOWED_ORIGINS ||
@@ -118,7 +126,9 @@ module.exports = async (req, res) => {
           variant
         ])
     );
-    const policy = getTierPolicy();
+    const policy = await loadPublishedThemeTierPolicy(
+      checkoutContext.mainTheme
+    );
     const authoritativeItems = buildAuthoritativeItems({
       requestedItems,
       variantsById,
@@ -143,7 +153,9 @@ module.exports = async (req, res) => {
       mode: proxyAuth.valid ? 'app_proxy' : 'legacy_server_verified',
       currency,
       country,
-      itemCount: lineItems.length
+      itemCount: lineItems.length,
+      tierPolicySource: 'published_theme',
+      themeId: checkoutContext.mainTheme.id
     });
 
     const draftOrder = await createDraftOrderWithRetry(draftOrderInput);
@@ -156,7 +168,8 @@ module.exports = async (req, res) => {
       currency: draftOrder.presentmentCurrencyCode,
       security_mode: proxyAuth.valid
         ? 'app_proxy'
-        : 'legacy_server_verified'
+        : 'legacy_server_verified',
+      tier_policy_source: 'published_theme'
     });
   } catch (error) {
     console.error('Draft order error:', {
@@ -220,6 +233,12 @@ async function loadCheckoutContext({ customerId, variantIds, country }) {
       shop {
         currencyCode
       }
+      themes(first: 1, roles: [MAIN]) {
+        nodes {
+          id
+          updatedAt
+        }
+      }
       customer: node(id: $customerId) {
         ... on Customer {
           id
@@ -275,8 +294,99 @@ async function loadCheckoutContext({ customerId, variantIds, country }) {
       data.shop && data.shop.currencyCode
     ) || DEFAULT_CURRENCY,
     customer: data.customer,
-    variants: Array.isArray(data.variants) ? data.variants : []
+    variants: Array.isArray(data.variants) ? data.variants : [],
+    mainTheme: data.themes && Array.isArray(data.themes.nodes)
+      ? data.themes.nodes[0]
+      : null
   };
+}
+
+async function loadPublishedThemeTierPolicy(mainTheme) {
+  if (!mainTheme || !mainTheme.id || !mainTheme.updatedAt) {
+    throw serverError(503, 'Shopify did not return the published theme');
+  }
+
+  const now = Date.now();
+  if (
+    themePolicyCache &&
+    themePolicyCache.themeId === mainTheme.id &&
+    themePolicyCache.updatedAt === mainTheme.updatedAt &&
+    themePolicyCache.expiresAt > now
+  ) {
+    return themePolicyCache.policy;
+  }
+
+  const query = `
+    query PublishedThemeTierSettings($themeId: ID!) {
+      theme(id: $themeId) {
+        id
+        files(
+          first: 2
+          filenames: [
+            "config/settings_data.json"
+            "config/settings_schema.json"
+          ]
+        ) {
+          nodes {
+            filename
+            body {
+              ... on OnlineStoreThemeFileBodyText {
+                content
+              }
+            }
+          }
+          userErrors {
+            code
+            filename
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const data = await executeAdminGraphQL(query, {
+      themeId: mainTheme.id
+    });
+    const files = data.theme && data.theme.files;
+    const fileNodes = files && Array.isArray(files.nodes)
+      ? files.nodes
+      : [];
+    const fileErrors = files && Array.isArray(files.userErrors)
+      ? files.userErrors
+      : [];
+
+    if (fileErrors.length > 0) {
+      throw new Error(
+        fileErrors.map(item => `${item.filename}: ${item.code}`).join('; ')
+      );
+    }
+
+    const contentsByFilename = new Map(
+      fileNodes.map(file => [
+        file.filename,
+        file.body && file.body.content
+      ])
+    );
+    const settings = mergePublishedThemeSettings(
+      contentsByFilename.get('config/settings_data.json'),
+      contentsByFilename.get('config/settings_schema.json')
+    );
+    const policy = getTierPolicyFromThemeSettings(settings);
+
+    themePolicyCache = {
+      themeId: mainTheme.id,
+      updatedAt: mainTheme.updatedAt,
+      expiresAt: now + THEME_POLICY_CACHE_TTL_MS,
+      policy
+    };
+    return policy;
+  } catch (error) {
+    throw serverError(
+      503,
+      `Unable to read tier pricing from the published theme: ${error.message}`
+    );
+  }
 }
 
 function buildDraftOrderLineItem(item) {
@@ -587,7 +697,20 @@ function parseBoolean(value, fallback) {
   return String(value).trim().toLowerCase() === 'true';
 }
 
+function normalizePositiveInteger(value, fallback) {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized > 0
+    ? normalized
+    : fallback;
+}
+
 function clientError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function serverError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
@@ -600,5 +723,6 @@ function sleep(ms) {
 module.exports._test = {
   authenticateAppProxy,
   buildDraftOrderLineItem,
+  loadPublishedThemeTierPolicy,
   validateRequestedItems
 };

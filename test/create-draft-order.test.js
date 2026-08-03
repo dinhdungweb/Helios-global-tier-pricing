@@ -98,6 +98,12 @@ test('handler uses proxy customer and Shopify authoritative price', async () => 
       return mockFetchResponse({
         data: {
           shop: { currencyCode: 'USD' },
+          themes: {
+            nodes: [{
+              id: 'gid://shopify/OnlineStoreTheme/1',
+              updatedAt: '2026-08-03T00:00:00Z'
+            }]
+          },
           customer: {
             id: 'gid://shopify/Customer/12345',
             tags: ['DIAMOND'],
@@ -117,6 +123,65 @@ test('handler uses proxy customer and Shopify authoritative price', async () => 
               collections: { nodes: [{ handle: 'all-products' }] }
             }
           }]
+        }
+      });
+    }
+
+    if (request.query.includes('query PublishedThemeTierSettings')) {
+      const settingsData = JSON.stringify({
+        current: {
+          tier_pricing_enabled: true,
+          tier_pricing_scope: 'all',
+          tier_2_discount: 12,
+          tier_prioritize_tags: true,
+          tier_use_custom_metafield: true
+        }
+      });
+      const settingsSchema = JSON.stringify([{
+        name: 'Tier Pricing',
+        settings: [
+          { id: 'tier_1_name', default: 'BLACK DIAMOND' },
+          { id: 'tier_1_tag', default: 'BLACK DIAMOND' },
+          { id: 'tier_1_discount', default: 15 },
+          { id: 'tier_1_threshold', default: '20000' },
+          { id: 'tier_2_name', default: 'DIAMOND' },
+          { id: 'tier_2_tag', default: 'DIAMOND' },
+          { id: 'tier_2_discount', default: 12 },
+          { id: 'tier_2_threshold', default: '3500' },
+          { id: 'tier_3_name', default: 'PLATINUM' },
+          { id: 'tier_3_tag', default: 'PLATINUM' },
+          { id: 'tier_3_discount', default: 10 },
+          { id: 'tier_3_threshold', default: '1500' },
+          { id: 'tier_4_name', default: 'GOLD' },
+          { id: 'tier_4_tag', default: 'GOLD' },
+          { id: 'tier_4_discount', default: 8 },
+          { id: 'tier_4_threshold', default: '500' },
+          { id: 'tier_5_name', default: 'SILVER' },
+          { id: 'tier_5_tag', default: 'SILVER' },
+          { id: 'tier_5_discount', default: 5 },
+          { id: 'tier_5_threshold', default: '250' },
+          { id: 'tier_6_name', default: 'MEMBER' },
+          { id: 'tier_6_discount', default: 0 }
+        ]
+      }]);
+      return mockFetchResponse({
+        data: {
+          theme: {
+            id: 'gid://shopify/OnlineStoreTheme/1',
+            files: {
+              nodes: [
+                {
+                  filename: 'config/settings_data.json',
+                  body: { content: settingsData }
+                },
+                {
+                  filename: 'config/settings_schema.json',
+                  body: { content: settingsSchema }
+                }
+              ],
+              userErrors: []
+            }
+          }
         }
       });
     }
